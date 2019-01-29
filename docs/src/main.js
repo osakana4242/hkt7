@@ -9,6 +9,8 @@ var ASSETS = {
 	'ship_shot': './img/ship_shot.png',
 	'explosion_big': './img/explosion_big.png',
 	'speed_line': './img/speed_line.png',
+	'bg_01': './img/bg_01.png',
+	'bg_02': './img/bg_02.png',
   },
 };
 
@@ -144,6 +146,14 @@ phina.define('MainScene', {
 		this.backgroundColor = '#8888ff';
 
 		{
+			const sprite = Sprite("bg_01");
+			sprite.x = 240 * 0.5;
+			sprite.y = 320 * 0.5;
+			sprite.addChildTo(this);
+			this.bg_01 = sprite;
+		}
+
+		{
 			const layer = DisplayElement();
 			layer.addChildTo(this);
 			this.layer0 = layer;
@@ -175,6 +185,7 @@ phina.define('MainScene', {
 				blockI: 0,
 			},
 		};
+
 
 		{
 			const sprite = Sprite("ship");
@@ -464,6 +475,13 @@ phina.define('MainScene', {
 		this.debugLabel.text = `XY(${player.sprite.x.toFixed(1)}, ${player.sprite.y.toFixed(1)})` +
 			` SAFE ${player.isInSafeArea}`;
 		this.label.text = "";
+
+		const height = (Math.max(0, progress.limitTime - progress.elapsedTime) / 1000);
+		let fuga = progress.elapsedTime / progress.limitTime;
+		fuga *= fuga;
+		const scale = 1.0 + MathHelper.clamp(10 * progress.elapsedTime / progress.limitTime, 0.0, 10.0);
+		this.bg_01.scaleX = scale;
+		this.bg_01.scaleY = scale;
 
 		this.label.text +=
 			'HEIGHT ' + (Math.max(0, progress.limitTime - progress.elapsedTime) / 1000).toFixed(2) + " M " +
