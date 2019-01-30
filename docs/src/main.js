@@ -14,6 +14,18 @@ var ASSETS = {
   },
 };
 
+var DF = {
+};
+DF.SC_W = 240;
+DF.SC_H = 320;
+
+class Rotation {
+}
+Rotation.RIGHT = 0;
+Rotation.DOWN = 90;
+Rotation.LEFT = 180;
+Rotation.UP = 270;
+
 class MathHelper {
 
 	static max(a, b) {
@@ -35,8 +47,12 @@ class MathHelper {
 
 	static clamp(v, min, max) {
 		if (v < min) return min;
-		if (max - 1 < v) return max - 1;
+		if (max < v) return max;
 		return v;
+	}
+
+	static clamp01(v, min, max) {
+		return MathHelper.clamp(v, 0.0, 1.0);
 	}
 
 	static lerp(a, b, t) {
@@ -52,15 +68,20 @@ class MathHelper {
 		return 1 <= t;
 	}
 
+	/** [ min, max ) */
 	static isInRange(v, min, max) {
 		return min <= v && v < max;
+	}
+
+	static progress01(t, length) {
+		if (length <= 0) return 1.0;
+		return MathHelper.clamp01(t / length);
 	}
 }
 
 function assertEq(a, b) {
 	if (a === b) return;
-	const n = 0;
-//	throw "assert " + a + " vs " + b;
+	throw "assert " + a + " vs " + b;
 }
 
 assertEq(0, MathHelper.wrap(3, 0, 3));
@@ -71,6 +92,16 @@ assertEq(1, MathHelper.wrap(-2, 0, 3));
 assertEq(0, MathHelper.wrap(-3, 0, 3));
 assertEq(2, MathHelper.wrap(-4, 0, 3));
 assertEq(1, MathHelper.wrap(-5, 0, 3));
+
+assertEq(0, MathHelper.clamp(-1, 0, 10));
+assertEq(10, MathHelper.clamp(11, 0, 10));
+
+assertEq(1, MathHelper.progress01(2, 0));
+assertEq(1, MathHelper.progress01(2, -10));
+assertEq(0, MathHelper.progress01(0, 10));
+assertEq(0.5, MathHelper.progress01(5, 10));
+assertEq(1, MathHelper.progress01(10, 10));
+assertEq(1, MathHelper.progress01(11, 10));
 
 class SmokeHelper {
 	static update(scene, smoke) {
@@ -95,10 +126,10 @@ class SmokeHelper {
 class FireHelper {
 	static update(scene, smoke) {
 		const t = MathHelper.tForLerp(smoke.elapsedTime, smoke.endTime);
-		smoke.sprite.rotation = smoke.rotation + 90;
+		smoke.sprite.rotation = smoke.rotation;
 		smoke.isActive &= !MathHelper.isLerpEnd(t);
 		smoke.elapsedTime += scene.app.ticker.deltaTime;
-		const v = new Vector2().fromDegree(smoke.rotation, 200 * scene.app.ticker.deltaTime / 1000.0);
+		const v = new Vector2().fromDegree(smoke.rotation, scene.data.config.playerBulletSpeed * scene.app.ticker.deltaTime / 1000.0);
 		smoke.sprite.x += v.x;
 		smoke.sprite.y += v.y;
 	}
@@ -107,7 +138,7 @@ class FireHelper {
 class SpeedLineHelper {
 	static update(scene, smoke) {
 		const t = MathHelper.tForLerp(smoke.elapsedTime, smoke.endTime);
-		smoke.sprite.rotation = smoke.rotation + 90;
+		smoke.sprite.rotation = smoke.rotation;
 		smoke.isActive &= !MathHelper.isLerpEnd(t);
 		smoke.elapsedTime += scene.app.ticker.deltaTime;
 		const v = new Vector2().fromDegree(smoke.rotation, 500 * scene.app.ticker.deltaTime / 1000.0);
@@ -137,6 +168,447 @@ const StateId = {
 	S3: 40,
 }
 
+class Player {
+	constructor() {
+		const sprite = Sprite("ship");
+		sprite.x = 120;
+		sprite.y = DF.SC_H * 3 / 4;
+		sprite.priority = 3;
+
+		this.score = 0;
+		this.sprite = sprite;
+		this.fireInterval = 50;
+		this.fireTime = 0;
+		this.rotation = Rotation.UP;
+		this.isInSafeArea = true;
+	}
+}
+
+class Enemy {
+	constructor(pos, moveData) {
+		const sprite = Sprite("enemy");
+		sprite.x = pos.x;
+		sprite.y = pos.y;
+		sprite.priority = 3;
+		this.moveWork = new MoveWork(pos, moveData);
+		this.score = 0;
+		this.sprite = sprite;
+		this.fireInterval = 200;
+		this.fireTime = 0;
+		this.stateTime = 0;
+		this.state = 0;
+		this.rotation = Rotation.UP;
+		this.isInSafeArea = true;
+		this.isActive = true;
+	}
+}
+
+class EnemyHelper {
+	static update(scene, enemy) {
+		MoveWorkHelper.evalaute(enemy.moveWork, enemy);
+		MoveWorkHelper.update(enemy.moveWork, scene.app.ticker.deltaTime);
+	}
+
+	static createEnemy(scene, pos, moveData) {
+		const enemy = new Enemy(pos, moveData);
+		enemy.sprite.addChildTo(scene.layer1);
+		scene.data.enemyArr.push(enemy);
+		return enemy;
+	}
+}
+
+class WaveWork {
+	constructor(waves) {
+		this.waves = waves;
+		this.waveIndex = 0;
+
+		const wave = this.waves[this.waveIndex];
+		const blocks = wave.blocks;
+		this.blockWorks = [];
+		this.blockIndex = 0;
+		this.waveTime = 0;
+		this.blockTime = 0;
+		this.isEnd = false;
+		WaveWorkHelper.resetBlock(this);
+	}
+}
+
+class BlockWork {
+	constructor(blockData) {
+		this.blockTime = 0;
+		this.blockData = blockData;
+		this.enemyIndex = 0;
+		this.isEnd = false;
+	}
+}
+
+class BlockWorkHelper {
+	static update(scene, waveWork, blockWork) {
+		const blockData = blockWork.blockData;
+		if (waveWork.waveTime < blockData.time) return;
+		if (blockWork.isEnd) return;
+		const enableCount = MathHelper.min(blockData.enemyCount, parseInt(blockWork.blockTime / blockData.delay));
+		for (var i = blockWork.enemyIndex; i < enableCount; i++) {
+			const moveData = moveDataDict[blockData.moveDataName];
+			EnemyHelper.createEnemy(scene, blockData.pos, moveData);
+		}
+		blockWork.enemyIndex = enableCount;
+		if (blockData.enemyCount <= blockWork.enemyIndex) {
+			blockWork.isEnd = true;
+		}
+		blockWork.blockTime += scene.app.ticker.deltaTime;
+	}
+}
+
+class WaveWorkHelper {
+
+	static resetBlock(waveWork) {
+		const wave = waveWork.waves[waveWork.waveIndex];
+		const blocks = wave.blocks;
+		waveWork.blockWorks = [];
+		for (let i = 0; i < blocks.length; i++) {
+			const blockData = blocks[i];
+			const blockWork = new BlockWork(blockData);
+			waveWork.blockWorks.push(blockWork);
+		}
+		waveWork.blockIndex = 0;
+		waveWork.waveTime = 0;
+		waveWork.blockTime = 0;
+	}
+
+	static update(scene, waveWork) {
+		if (waveWork.isEnd) return;
+
+		const blocks = waveWork.blockWorks;
+		for (let i = 0; i < blocks.length; i++) {
+			const blockWork = blocks[i];
+			BlockWorkHelper.update(scene, waveWork, blockWork);
+		}
+		let endBlockCount = 0;
+		for (let i = 0; i < blocks.length; i++) {
+			const blockWork = blocks[i];
+			if (blockWork.isEnd) {
+				endBlockCount++;
+			}
+		}
+		if (blocks.length <= endBlockCount) {
+			const isEnemyZero = scene.data.enemyArr.length <= 0;
+			if (isEnemyZero) {
+				var nextWaveIndex = MathHelper.wrap(waveWork.waveIndex + 1, 0, waveWork.waves.length);
+				waveWork.waveIndex = nextWaveIndex;
+				WaveWorkHelper.resetBlock(waveWork);
+				//waveWork.isEnd = true;
+				return;
+			}
+		}
+
+		waveWork.waveTime += scene.app.ticker.deltaTime;
+	}
+}
+
+const waveData = [
+	{
+		'blocks': [
+			{
+				'time': 500,
+				'type': '',
+				'moveDataName': 'circle_l',
+				'pos': { 'x': 180, 'y': 160 },
+				'delay': 200,
+				'enemyCount': 10,
+			},
+		],
+	},
+	{
+		'blocks': [
+			{
+				'time': 0,
+				'type': '',
+				'moveDataName': 'circle_r',
+				'pos': { 'x': 60, 'y': 160 },
+				'delay': 200,
+				'enemyCount': 10,
+			},
+		],
+	},
+	{
+		'blocks': [
+			{
+				'time': 0,
+				'type': '',
+				'moveDataName': 'circle_r',
+				'pos': { 'x': 100, 'y': 160 },
+				'delay': 200,
+				'enemyCount': 10,
+			},
+			{
+				'time': 100,
+				'type': '',
+				'moveDataName': 'circle_r',
+				'pos': { 'x': 140, 'y': 160 },
+				'delay': 200,
+				'enemyCount': 10,
+			},
+		],
+	},
+	{
+		'blocks': [
+			{
+				'time': 0,
+				'type': '',
+				'moveDataName': 'circle_l',
+				'pos': { 'x': 100, 'y': 160 },
+				'delay': 200,
+				'enemyCount': 10,
+			},
+			{
+				'time': 100,
+				'type': '',
+				'moveDataName': 'circle_l',
+				'pos': { 'x': 140, 'y': 160 },
+				'delay': 200,
+				'enemyCount': 10,
+			},
+		],
+	},
+	{
+		'blocks': [
+			{
+				'time': 0,
+				'type': '',
+				'moveDataName': 'zigzag_down',
+				'pos': { 'x': 40, 'y': 0 },
+				'delay': 200,
+				'enemyCount': 10,
+			},
+			{
+				'time': 200,
+				'type': '',
+				'moveDataName': 'zigzag_down',
+				'pos': { 'x': 80, 'y': 0 },
+				'delay': 200,
+				'enemyCount': 10,
+			},
+			{
+				'time': 300,
+				'type': '',
+				'moveDataName': 'zigzag_down',
+				'pos': { 'x': 120, 'y': 0 },
+				'delay': 200,
+				'enemyCount': 10,
+			},
+		],
+	},
+	{
+		'blocks': [
+			{
+				'time': 0,
+				'type': '',
+				'moveDataName': 'zigzag_down',
+				'pos': { 'x': 200, 'y': 0 },
+				'delay': 200,
+				'enemyCount': 10,
+			},
+			{
+				'time': 200,
+				'type': '',
+				'moveDataName': 'zigzag_down',
+				'pos': { 'x': 160, 'y': 0 },
+				'delay': 200,
+				'enemyCount': 10,
+			},
+			{
+				'time': 300,
+				'type': '',
+				'moveDataName': 'zigzag_down',
+				'pos': { 'x': 120, 'y': 0 },
+				'delay': 200,
+				'enemyCount': 10,
+			},
+		],
+	},
+];
+
+const moveDataDict = {
+	'circle_r': [
+		{
+			type: 'path',
+			time: 500,
+			samples: [
+				{ t:  0.00, x: 100,  y:   0 },
+			],
+		},
+		{
+			type: 'path',
+			time: 5000,
+			samples: [
+				{ t:  0.00, x: 100,  y:   0 },
+				{ t:  0.10, x:  70,  y:  70 },
+				{ t:  0.20, x:  0,  y:  100 },
+				{ t:  0.35, x:  -70,  y: 70 },
+				{ t:  0.40, x: -100, y:   0 },
+				{ t:  0.50, x:  -70, y: -70 },
+				{ t:  0.60, x:  0,  y: -100 },
+				{ t:  0.70, x:  70,  y: -70 },
+				{ t:  1.00, x: 100,  y:   0 },
+			],
+		},
+		{
+			type: 'path',
+			time: 1000,
+			samples: [
+				{ t:  0.00, x: 100,  y:   0 },
+				{ t:  1.00, x: 300,  y: 300 },
+			],
+		},
+	],
+	'circle_l': [
+		{
+			type: 'path',
+			time: 500,
+			samples: [
+				{ t:  0.00, x: -100,  y:   0 },
+			],
+		},
+		{
+			type: 'path',
+			time: 5000,
+			samples: [
+				{ t:  0.00, x: -100,  y:   0 },
+				{ t:  0.10, x:  -70,  y:  -70 },
+				{ t:  0.20, x:  0,  y:  -100 },
+				{ t:  0.35, x:  70,  y: -70 },
+				{ t:  0.40, x: 100, y:   0 },
+				{ t:  0.50, x:  70, y: 70 },
+				{ t:  0.60, x:  0,  y: 100 },
+				{ t:  0.70, x:  -70,  y: 70 },
+				{ t:  1.00, x: -100,  y:   0 },
+			],
+		},
+		{
+			type: 'path',
+			time: 1000,
+			samples: [
+				{ t:  0.00, x: -100,  y:   0 },
+				{ t:  1.00, x: -300,  y: -300 },
+			],
+		},
+	],
+	'zigzag_down': [
+		{
+			type: 'path',
+			time: 500,
+			samples: [
+				{ t:  0.00, x: 0,  y:   0 },
+			],
+		},
+		{
+			type: 'path',
+			time: 3000,
+			samples: [
+				{ t:  0.00, x: 0,  y:   0 },
+				{ t:  0.10, x: -20,  y:   40 },
+				{ t:  0.20, x: 20,  y:   80 },
+				{ t:  0.30, x: -20,  y:   120 },
+				{ t:  0.40, x: 20,  y:   160 },
+				{ t:  0.50, x: -20,  y:   200 },
+				{ t:  0.60, x: 20,  y:   240 },
+				{ t:  1.00, x: 0,  y:   320 },
+			],
+		},
+		{
+			type: 'path',
+			time: 4000,
+			samples: [
+				{ t:  0.00, x: 0,  y:   320 },
+				{ t:  0.10, x: -20,  y: 280 },
+				{ t:  0.20, x: 20,  y:   240 },
+				{ t:  0.30, x: -20,  y:   200 },
+				{ t:  0.40, x: 20,  y:   160 },
+				{ t:  0.50, x: -20,  y:   120 },
+				{ t:  0.60, x: 20,  y:   80 },
+				{ t:  1.00, x: 0,  y:   0 },
+			],
+		},
+	],
+};
+
+class MoveWork {
+	constructor(pos, moveData) {
+		this.pos = new Vector2(pos.x, pos.y);
+		this.index = 0;
+		this.time = 0;
+		this.state = 0;
+		this.moveData = moveData;
+	}
+}
+
+class MoveWorkHelper {
+	static getPosition(moveWork, curPos) {
+		const moveData = moveWork.moveData;
+		if (MoveWorkHelper.isEnd(moveWork)) return curPos;
+		const curve = moveData[moveWork.index];
+		const t1 = MathHelper.clamp01(moveWork.time / curve.time);
+		const samples = curve.samples;
+		let minSample = samples[0];
+		let maxSample = minSample;
+		for (let i = samples.length - 1; 0 <= i; i--) {
+			const sample = samples[i];
+			if (sample.t <= t1) {
+				minSample = sample;
+				maxSample = samples[Math.min(i + 1, samples.length - 1)];
+				break;
+			}
+		}
+		const t2 = MathHelper.progress01(t1 - minSample.t, maxSample.t - minSample.t);
+		//console.log(`t1: ${t1.toFixed(2)}, t2: ${t2.toFixed(2)}`);
+		const pos = Vector2.lerp(minSample, maxSample, t2);
+		pos.add(moveWork.pos);
+		return pos;
+	}
+
+	static evalaute(moveWork, enemy) {
+		if (!enemy.isActive) return;
+		const pos = enemy.sprite;
+		const nextPos = MoveWorkHelper.getPosition(moveWork, enemy);
+		const v = Vector2.sub(nextPos, pos);
+		if (0 < v.lengthSquared()) {
+			enemy.sprite.rotation = v.toDegree();
+		}
+		enemy.sprite.x = nextPos.x;
+		enemy.sprite.y = nextPos.y;
+
+		enemy.isActive &= !MoveWorkHelper.isEnd(enemy.moveWork);
+	}
+
+	static isEnd(moveWork) {
+		return moveWork.moveData.length <= moveWork.index;
+	}
+
+	static update(moveWork, deltaTime) {
+		if (MoveWorkHelper.isEnd(moveWork)) return; 
+		const moveData = moveWork.moveData;
+		const curve = moveData[moveWork.index];
+		if (curve.time <= moveWork.time) {
+			moveWork.index++;
+			moveWork.time = 0;
+			return;
+		}
+		moveWork.time += deltaTime;
+	}
+}
+
+class ObjectArrayHelper {
+	static removeInactive(objArr) {
+		for (let i = objArr.length - 1; 0 <= i; i--) {
+			const item = objArr[i];
+			if (item.isActive) continue;
+			item.sprite.remove();
+			objArr.splice(i, 1);
+		}
+	}
+}
+
 // MainScene クラスを定義
 phina.define('MainScene', {
   superClass: 'DisplayScene',
@@ -147,8 +619,8 @@ phina.define('MainScene', {
 
 		{
 			const sprite = Sprite("bg_01");
-			sprite.x = 240 * 0.5;
-			sprite.y = 320 * 0.5;
+			sprite.x = DF.SC_W * 0.5;
+			sprite.y = DF.SC_H * 0.5;
 			sprite.addChildTo(this);
 			this.bg_01 = sprite;
 		}
@@ -170,11 +642,15 @@ phina.define('MainScene', {
 			smokeArr: [],
 			fireArr: [],
 			speedLineArr: [],
+			enemyArr: [],
 			blastArr: [],
+			waveWork: new WaveWork(waveData),
 			config: {
 				drawHeight: 8,
 				playerSpeed: 45,
 				playerRotationSpeed: 120,
+				playerBulletSpeed: 400,
+				playerBulletCount: 2,
 			},
 			progress: {
 				state: StateId.S1I,
@@ -186,25 +662,8 @@ phina.define('MainScene', {
 			},
 		};
 
-
-		{
-			const sprite = Sprite("ship");
-			sprite.width = 48;
-			sprite.height = 48;
-			sprite.x = 120;
-			sprite.y = 320 * 3 / 4;
-			sprite.priority = 3;
-			sprite.addChildTo(this.layer1);
-
-			data.player = {
-				score: 0,
-				sprite: sprite,
-				fireInterval: 200,
-				fireTime: 0,
-				rotation: -90,
-				isInSafeArea: true,
-			};
-		}
+		data.player = new Player();
+		data.player.sprite.addChildTo(this.layer1);
 
 		{
 			const label = Label({
@@ -248,8 +707,8 @@ phina.define('MainScene', {
 				stroke: '#000000',
 				strokeWidth: 4,
 			}).addChildTo(this);
-			label.x = 240 * 0.5;
-			label.y = 320 * 0.5;
+			label.x = DF.SC_W * 0.5;
+			label.y = DF.SC_H * 0.5;
 			label.text = "hkt6";
 			this.centerLabel = label;
 		}
@@ -289,7 +748,7 @@ phina.define('MainScene', {
 
 	createFire: function(pos, rotation) {
 		const sprite = Sprite('ship_shot');
-		sprite.rotation = rotation + 90;
+		sprite.rotation = rotation;
 		sprite.x = pos.x;
 		sprite.y = pos.y;
 		sprite.priority = 2;
@@ -307,7 +766,7 @@ phina.define('MainScene', {
 
 	createSpeedLine: function(pos, rotation) {
 		const sprite = Sprite('speed_line');
-		sprite.rotation = rotation + 90;
+		sprite.rotation = rotation;
 		sprite.x = pos.x;
 		sprite.y = pos.y;
 		sprite.priority = 2;
@@ -348,13 +807,13 @@ phina.define('MainScene', {
 		const progress = this.data.progress;
 		switch (progress.state) {
 			case StateId.S1I:
-				this.centerLabel.text = "READY";
+				this.centerLabel.text = "MISSION START";
 				progress.elapsedTime = 0;
 				player.score = 0;
 				player.railX = 1;
 				{
-					var tx = (240 / 3) * (player.railX + 0.5);
-					player.sprite.y = 320 - 40;
+					var tx = (DF.SC_W / 3) * (player.railX + 0.5);
+					player.sprite.y = DF.SC_H - 40;
 					player.sprite.x = tx;
 				}
 				progress.blockI = 0;
@@ -381,7 +840,7 @@ phina.define('MainScene', {
 						player.rotation += rotation * this.data.config.playerRotationSpeed * this.app.ticker.deltaTime / 1000.0;
 					}
 					if (appInput.putFire) {
-						if (player.fireInterval <= player.fireTime) {
+						if (player.fireInterval <= player.fireTime && this.data.fireArr.length < this.data.config.playerBulletCount) {
 							player.fireTime = 0;
 							this.createFire(player.sprite, player.rotation);
 						}
@@ -392,14 +851,14 @@ phina.define('MainScene', {
 				for (let i = 0; i < 4; i++) {
 					const rot = (progress.stateTime % 360) + (i * 80);
 					const vec = new Vector2().fromDegree(rot, 100);
-					vec.x += 240 * 0.5;
-					vec.y += 320 * 0.5;
+					vec.x += DF.SC_W * 0.5;
+					vec.y += DF.SC_H * 0.5;
 					this.createSpeedLine(vec, rot);
 				}
 
 
 				{
-					var safeArea = new Rect(0, 0, 240, 320);
+					var safeArea = new Rect(0, 0, DF.SC_W, DF.SC_H);
 					player.isInSafeArea = Collision.testRectRect(safeArea, player.sprite);
 				}
 
@@ -422,40 +881,47 @@ phina.define('MainScene', {
 				if (this.app.keyboard.getKeyDown('t')) {
 					progress.elapsedTime = progress.limitTime - 2000;
 				}
+				if (this.app.keyboard.getKeyDown('e')) {
+					const moveData = moveDataDict['circle'];
+					EnemyHelper.createEnemy(this, new Vector2(DF.SC_W * 0.5, DF.SC_H * 0.5), moveData);
+				}
+
+				WaveWorkHelper.update(this, this.data.waveWork);
+
+				this.data.fireArr.forEach((_item) => FireHelper.update(this, _item));
+
+
 				{
-					// update
+					var safeArea = new Rect(0, 0, DF.SC_W, DF.SC_H);
+					this.data.fireArr.forEach((_item) => {
+						if (Collision.testRectRect(safeArea, _item.sprite)) return;
+						_item.isActive = false;
+					});
+				}
+
+				this.data.speedLineArr.forEach((_item) => SpeedLineHelper.update(this, _item));
+
+				this.data.enemyArr.forEach((_item) => EnemyHelper.update(this, _item));
+
+				{
 					const fireArr = this.data.fireArr;
-					for (var i = 0; i < fireArr.length; i++) {
-						FireHelper.update(this, fireArr[i]);
+					const enemyArr = this.data.enemyArr;
+					for (var i1 = 0; i1 < fireArr.length; i1++) {
+						const fire = fireArr[i1];
+						for (var i2 = 0; i2 < enemyArr.length; i2++) {
+							const enemy = enemyArr[i2];
+							if (!enemy.sprite.hitTestElement(fire.sprite)) continue;
+							enemy.isActive = false;
+							fire.isActive = false;
+							player.score += 100;
+						}
 					}
 				}
-				{
-					// remove
-					const fireArr = this.data.fireArr;
-					for (let i = fireArr.length - 1; 0 <= i; i--) {
-						const fire = fireArr[i];
-						if (fire.isActive) continue;
-						fire.sprite.remove();
-						fireArr.splice(i, 1);
-					}
-				}
-				{
-					// update
-					const speedLineArr = this.data.speedLineArr;
-					for (var i = 0; i < speedLineArr.length; i++) {
-						SpeedLineHelper.update(this, speedLineArr[i]);
-					}
-				}
-				{
-					// remove
-					const speedLineArr = this.data.speedLineArr;
-					for (let i = speedLineArr.length - 1; 0 <= i; i--) {
-						const speedLine = speedLineArr[i];
-						if (speedLine.isActive) continue;
-						speedLine.sprite.remove();
-						speedLineArr.splice(i, 1);
-					}
-				}
+
+				ObjectArrayHelper.removeInactive(this.data.fireArr);
+				ObjectArrayHelper.removeInactive(this.data.speedLineArr);
+				ObjectArrayHelper.removeInactive(this.data.enemyArr);
+
 				break;
 			case StateId.S3I:
 				progress.state = StateId.S3;
@@ -470,7 +936,7 @@ phina.define('MainScene', {
 		}
 		progress.stateTime += this.app.ticker.deltaTime;
 
-		player.sprite.rotation = player.rotation + 90;
+		player.sprite.rotation = player.rotation;
 
 		this.debugLabel.text = `XY(${player.sprite.x.toFixed(1)}, ${player.sprite.y.toFixed(1)})` +
 			` SAFE ${player.isInSafeArea}`;
@@ -501,8 +967,8 @@ phina.main(function() {
   let app = GameApp({
     startLabel: 'main', // メインシーンから開始する
 		fps: 60,
-		width: 240,
-		height: 320,
+		width: DF.SC_W,
+		height: DF.SC_H,
     assets: ASSETS,
   });
   // アプリケーション実行
