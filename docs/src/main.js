@@ -656,7 +656,7 @@ phina.define('MainScene', {
 				state: StateId.S1I,
 				stateTime: 0,
 				elapsedTime: 0,
-				limitTime: 1000 * 100,
+				limitTime: 1000 * 90,
 				mapI: 0,
 				blockI: 0,
 			},
@@ -942,15 +942,19 @@ phina.define('MainScene', {
 			` SAFE ${player.isInSafeArea}`;
 		this.label.text = "";
 
-		const height = (Math.max(0, progress.limitTime - progress.elapsedTime) / 1000);
+		const restTime = Math.max(0, progress.limitTime - progress.elapsedTime);
+		const height = restTime / 1000;
 		let fuga = progress.elapsedTime / progress.limitTime;
 		fuga *= fuga;
-		const scale = 1.0 + MathHelper.clamp(10 * progress.elapsedTime / progress.limitTime, 0.0, 10.0);
+		// let scale = 1.0 + MathHelper.clamp(10 * progress.elapsedTime / progress.limitTime, 0.0, 10.0);
+		let scale = (100 / (100 * Math.max(1, restTime / progress.limitTime)));
+		scale = MathHelper.clamp(scale, 0, 100);
+
 		this.bg_01.scaleX = scale;
 		this.bg_01.scaleY = scale;
 
 		this.label.text +=
-			'HEIGHT ' + (Math.max(0, progress.limitTime - progress.elapsedTime) / 1000).toFixed(2) + " M " +
+			'HEIGHT ' + (restTime / 1000).toFixed(2) + " M " +
 			'SCORE ' + Math.floor(player.score) +
 			'';
 
