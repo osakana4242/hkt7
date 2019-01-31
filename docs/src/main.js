@@ -947,7 +947,7 @@ phina.define('MainScene', {
 		let fuga = progress.elapsedTime / progress.limitTime;
 		fuga *= fuga;
 		// let scale = 1.0 + MathHelper.clamp(10 * progress.elapsedTime / progress.limitTime, 0.0, 10.0);
-		let scale = (100 / (100 * Math.max(1, restTime / progress.limitTime)));
+		let scale = (100 / Math.max(1, (100 * (1, restTime / progress.limitTime))));
 		scale = MathHelper.clamp(scale, 0, 100);
 
 		this.bg_01.scaleX = scale;
