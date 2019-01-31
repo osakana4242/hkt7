@@ -11,7 +11,26 @@ var ASSETS = {
 	'speed_line': './img/speed_line.png',
 	'bg_01': './img/bg_01.png',
 	'bg_02': './img/bg_02.png',
-  },
+	},
+	spritesheet: {
+		"explosion_big": {
+			// フレーム情報
+			"frame": {
+				"width": 32, // 1フレームの画像サイズ（横）
+				"height": 32, // 1フレームの画像サイズ（縦）
+				"cols": 4, // フレーム数（横）
+				"rows": 1, // フレーム数（縦）
+			},
+			// アニメーション情報
+			"animations" : {
+				"explosion_big": { // アニメーション名
+				"frames": [0, 1, 2, 3], // フレーム番号範囲
+				"next": "", // 次のアニメーション
+				"frequency": 6, // アニメーション間隔
+				},
+			}
+		},
+	}
 };
 
 var DF = {
@@ -173,7 +192,7 @@ class Player {
 		const sprite = Sprite("ship");
 		sprite.x = 120;
 		sprite.y = DF.SC_H * 3 / 4;
-		sprite.priority = 3;
+		sprite.priority = 5;
 
 		this.score = 0;
 		this.sprite = sprite;
@@ -214,6 +233,39 @@ class EnemyHelper {
 		enemy.sprite.addChildTo(scene.layer1);
 		scene.data.enemyArr.push(enemy);
 		return enemy;
+	}
+}
+
+class Explosion {
+	constructor(pos) {
+		const sprite = new Sprite("explosion_big");
+		sprite.priority = 1;
+		sprite.x = pos.x;
+		sprite.y = pos.y;
+		this.sprite = sprite;
+		var anim = new FrameAnimation("explosion_big").attachTo(sprite);
+		anim.gotoAndPlay("explosion_big");
+		this.anim = anim;
+		this.isActive = true;
+	}
+}
+
+class ExplosionHelper {
+	static update(scene, explosion) {
+		if (explosion.anim.finished) {
+			explosion.isActive = false;
+		}
+	}
+
+	static createExplosion(scene, pos) {
+		const pos2 = new Vector2(
+			pos.x + Math.random() * 8 - 4,
+			pos.y + Math.random() * 8 - 4
+		);
+		const explosion = new Explosion(pos2);
+		explosion.sprite.addChildTo(scene.layer1);
+		scene.data.explosionArr.push(explosion);
+		return explosion;
 	}
 }
 
@@ -643,7 +695,7 @@ phina.define('MainScene', {
 			fireArr: [],
 			speedLineArr: [],
 			enemyArr: [],
-			blastArr: [],
+			explosionArr: [],
 			waveWork: new WaveWork(waveData),
 			config: {
 				drawHeight: 8,
@@ -680,6 +732,7 @@ phina.define('MainScene', {
 			label.x = 8;
 			label.y = 16;
 			this.debugLabel = label;
+			this.debugLabel.visible = false;
 		}
 		{
 			const label = Label({
@@ -900,8 +953,8 @@ phina.define('MainScene', {
 				}
 
 				this.data.speedLineArr.forEach((_item) => SpeedLineHelper.update(this, _item));
-
 				this.data.enemyArr.forEach((_item) => EnemyHelper.update(this, _item));
+				this.data.explosionArr.forEach((_item) => ExplosionHelper.update(this, _item));
 
 				{
 					const fireArr = this.data.fireArr;
@@ -913,6 +966,7 @@ phina.define('MainScene', {
 							if (!enemy.sprite.hitTestElement(fire.sprite)) continue;
 							enemy.isActive = false;
 							fire.isActive = false;
+							ExplosionHelper.createExplosion(this, enemy.sprite);
 							player.score += 100;
 						}
 					}
@@ -921,6 +975,7 @@ phina.define('MainScene', {
 				ObjectArrayHelper.removeInactive(this.data.fireArr);
 				ObjectArrayHelper.removeInactive(this.data.speedLineArr);
 				ObjectArrayHelper.removeInactive(this.data.enemyArr);
+				ObjectArrayHelper.removeInactive(this.data.explosionArr);
 
 				break;
 			case StateId.S3I:
